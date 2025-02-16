@@ -1,4 +1,5 @@
 import os
+import time
 from dotenv import load_dotenv
 import streamlit as st
 import requests
@@ -7,7 +8,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from mistralai import Mistral
-
 import joblib  # For loading the model and LabelEncoder
 
 # -------------------------------
@@ -28,14 +28,38 @@ RAPPEL_URL = "https://rappel.conso.gouv.fr/categorie/94/1"
 TODAY = datetime.today()
 START_DATE = TODAY - timedelta(days=7)
 
+year_input = datetime.today().year
+
 # -------------------------------
 # Functions
 # -------------------------------
 
+def get_zone_geographique(url):
+    """
+    Request the recall detail page and extract the region information corresponding to "Zone géographique de vente".
+    """
+    try:
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            print(f"Error fetching details for URL: {url} (status code: {resp.status_code})")
+            return ""
+        detail_soup = BeautifulSoup(resp.text, "html.parser")
+        for li in detail_soup.find_all("li", class_="product-desc-item"):
+            carac = li.find("span", class_="carac")
+            if carac and "Zone géographique de vente" in carac.get_text(strip=True):
+                val = li.find("span", class_="val")
+                if val:
+                    return val.get_text(strip=True)
+        return ""
+    except Exception as e:
+        print(f"Error scraping zone for {url}: {e}")
+        return ""
+
 def fetch_recalls():
     """
-    Fetch recall records from rappel.conso.gouv.fr (e.g., Viandes category page)
-    and filter records published in the last 7 days.
+    Scrape recall records from rappel.conso.gouv.fr (e.g., the Viandes category page), 
+    and filter records from the last 7 days.
+    Also, for each record, scrape the detail page to obtain the region information (zone).
     """
     recalls = []
     response = requests.get(RAPPEL_URL)
@@ -60,7 +84,7 @@ def fetch_recalls():
         maker_tag = li.find("p", class_="product-maker")
         maker = maker_tag.get_text(strip=True) if maker_tag else ""
 
-        # "Risques" & "Motif"
+        # "Risks" & "Reason"
         desc_div = li.find("div", class_="product-desc")
         risks, motif = "", ""
         if desc_div:
@@ -86,9 +110,14 @@ def fetch_recalls():
             except ValueError:
                 pass
 
-        # If date is missing or not within the last 7 days, skip it
+        # Skip if the date is missing or not within the last 7 days
         if not record_date or not (START_DATE <= record_date <= TODAY):
             continue
+
+        # Get the "Zone géographique de vente" from the detail page
+        zone = get_zone_geographique(full_link)
+        # Pause briefly to avoid making requests too rapidly
+        time.sleep(0.5)
 
         recalls.append({
             "date": date_text,
@@ -96,13 +125,41 @@ def fetch_recalls():
             "maker": maker,
             "risks": risks,
             "motif": motif,
-            "link": full_link
+            "link": full_link,
+            "zone": zone
         })
     return recalls
 
+def count_region_occurrences_last_week(records, region_input):
+    """
+    Count the number of times the specified region_input appears in the records from the last week.
+    Parameters:
+      records: List of dictionaries containing recall records, each record should have "date" and "zone" fields.
+      region_input: The region string to count occurrences of.
+    Returns:
+      The number of occurrences of the specified region in the last week.
+    """
+    count = 0
+    now = datetime.now()
+    one_week_ago = now - timedelta(days=7)
+    
+    for record in records:
+        date_str = record.get("date", "")
+        try:
+            record_date = datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S")
+        except Exception as e:
+            print(f"Failed to parse date format: {date_str}, error: {e}")
+            continue
+        
+        if one_week_ago <= record_date <= now:
+            # Use substring matching to determine if the region matches
+            if region_input in record.get("zone", ""):
+                count += 1
+    return count
+
 def analyze_with_mistral(article_text):
     """
-    Call the Mistral model to analyze the recall text risk score (0-100).
+    Use the Mistral model to analyze the recall text and assign a food safety risk score (0-100).
     """
     prompt_system = (
         "You are a food safety expert. You will receive a recall announcement in French. "
@@ -129,12 +186,13 @@ def analyze_with_mistral(article_text):
         print(f"[Error] Mistral API Error or parse error: {str(e)}")
         return 100
 
-def get_recall_ratings(progress_bar=None):
+def get_recall_ratings(progress_bar=None, recalls=None):
     """
-    Fetch recall records and score them with Mistral,
-    returning a DataFrame.
+    Use Mistral to score recall records and return a DataFrame.
+    If recalls are provided, use that list; otherwise, call fetch_recalls().
     """
-    recalls = fetch_recalls()
+    if recalls is None:
+        recalls = fetch_recalls()
     data = []
     
     if progress_bar:
@@ -158,13 +216,9 @@ def get_recall_ratings(progress_bar=None):
     
     return pd.DataFrame(data)
 
-# -------------------------------
-# TPOT Model Loading
-# -------------------------------
-
 def load_tpot_model():
     """
-    Load the pre-trained TPOT model and associated LabelEncoder (if available).
+    Load the pre-trained TPOT model and the associated LabelEncoder (if available).
     """
     model = None
     label_encoder = None
@@ -184,15 +238,16 @@ def load_tpot_model():
 def main():
     st.title("🇫🇷 OneHealth Early Warning")
     
-    # Progress bar message
+    # Progress bar
     progress_text = st.empty()
     progress_text.write("Fetching recalls from rappel.conso.gouv.fr and analyzing food safety risks with Mistral AI...")
     progress_bar = st.progress(0)
     
-    # Fetch recall records and score them with Mistral
-    df = get_recall_ratings(progress_bar=progress_bar)
+    # First, fetch raw recall records (including zone information)
+    recalls = fetch_recalls()
+    # Then, use these records to score with Mistral, generating a DataFrame
+    df = get_recall_ratings(progress_bar=progress_bar, recalls=recalls)
     
-    # Clear progress bar
     progress_text.empty()
     progress_bar.empty()
     
@@ -205,7 +260,7 @@ def main():
     
     st.subheader(f"📊 National Overall Meat Safety Index (Last Week): {avg_index:.2f} / 100")
     
-    # Gauge chart
+    # Gauge indicator chart
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=avg_index,
@@ -222,9 +277,9 @@ def main():
     ))
     st.plotly_chart(fig)
     
-    # Display all recall records in one expander
+    # Display all recall records
     if not df.empty:
-        st.subheader("📢 Detailed Recall Records (Last Week)")
+        st.subheader("📢 Detailed Recall Records")
         with st.expander("View All Recall Details"):
             for _, row in df.iterrows():
                 st.write(f"**Title:** {row['title']}")
@@ -238,29 +293,30 @@ def main():
     # ---------------------------------------
     # Manual Prediction with TPOT Model
     # ---------------------------------------
-    st.subheader("🔍 Manual Prediction with our Model")
+    st.subheader("🔍 Prediction with our Model (Version beta)")
     st.markdown("Enter features below to predict using the pre-trained model.")
 
     # Load model and encoder
     tpot_model, region_label_encoder = load_tpot_model()
     
     if tpot_model is not None and region_label_encoder is not None:
-        # Retrieve the list of all region labels seen during training
+        # Get the list of all region labels used during training
         valid_regions = region_label_encoder.classes_
         
-        # Allow the user to select a region from the dropdown instead of entering it manually
+        # User selects region (dropdown menu)
         region_input = st.selectbox("Region", options=valid_regions, index=0)
-        
-        year_input = st.number_input("Year", min_value=1900, max_value=2100, value=2023, step=1)
-        count_risk_input = st.number_input("count_risk", min_value=0, max_value=1000000, value=100, step=1)
         uhii_input = st.number_input("UHII", min_value=0.0, max_value=100.0, value=2.5)
         co2_input = st.number_input("CO2", min_value=0.0, max_value=1e6, value=500.0)
         
+        # Using previously scraped recall records, count occurrences of the selected region
+        occurrence_count = count_region_occurrences_last_week(recalls, region_input)
+        count_risk_input = occurrence_count*52.14
+
         if st.button("Predict with TPOT Model"):
             # Encode region
             region_encoded = region_label_encoder.transform([region_input])[0]
             
-            # Features order must be consistent with training
+            # Feature order must match the training order
             features = [[
                 region_encoded,
                 year_input,
@@ -271,16 +327,14 @@ def main():
             
             # Call the model
             prediction = tpot_model.predict(features)
+            # Compute the predicted value (e.g., divide the prediction by 52.14 and round)
+            prediction_rounded = int(round(prediction[0] / 52.14))
             
-            # Convert prediction to integer (rounded)
-            prediction_rounded = int(round(prediction[0]/52.14))
-            
-            # Display the integer output
-            st.success(f"Prediction for Nomber of Consultation in {region_input} next week on Doctolib is {prediction_rounded}")
+            st.info(f"In the last week, region **{region_input}** appeared in **{occurrence_count}** recall records.")
+            st.success(f"Prediction for Number of Consultation in {region_input} next week on Doctolib is {prediction_rounded}")
     
     else:
         st.warning("TPOT model or region_label_encoder was not loaded successfully, unable to make predictions.")
-
 
 if __name__ == "__main__":
     main()
