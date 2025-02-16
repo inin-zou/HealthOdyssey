@@ -1,5 +1,3 @@
-Below is a sample **README** that you can adapt to your own repository and workflow. Feel free to modify any sections to better reflect your project’s structure, usage, or context.
-
 ---
 
 # OneHealth Early Warning
