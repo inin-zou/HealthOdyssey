@@ -110,4 +110,40 @@ Below is a generic guide. Adapt for your environment (conda, pipenv, Docker, etc
 
 ---
 
+## Data Collection: getNews.py
+
+We gather recall data from the official French government site rappel.conso.gouv.fr using a custom Python script named getNews.py. This script performs web scraping and data parsing, ensuring that we have the latest information on meat product recalls. The resulting dataset is then fed into our OneHealth Early Warning system to enrich our predictive modeling and dashboard displays.
+
+### Key points about getNews.py:
+
+Purpose: Scrapes recall details (e.g., product name, brand, recall date, risk level) from the rappel.conso.gouv.fr site.
+Output: Saves the scraped data into a structured CSV or DataFrame (e.g., CS_rappel_viandes.csv).
+
+### Usage:
+```
+python getNews.py
+```
+This command will run the scraper and produce or update the CSV file with the latest recall records.
+Dependencies: Requires libraries such as requests, BeautifulSoup, or selenium (depending on your scraping method). Make sure these are listed in requirements.txt.
+
+---
+
+## Model Development: TrainModel.ipynb
+
+We use *TrainModel.ipynb* as our primary Jupyter Notebook for developing and training the predictive model. This notebook includes:
+
+Data Preparation: Loading raw data (e.g., from CS_env.csv and CS_rappel_viandes.csv), performing cleaning, and handling missing values.
+Feature Engineering: Encoding categorical features (e.g., region), creating time-based features, and integrating environmental factors (UHII, CO₂).
+Model Training & Validation:
+Uses TPOT or other machine learning frameworks to automatically search for optimal model pipelines.
+Employs cross-validation (e.g., RepeatedKFold) to evaluate model performance and mitigate overfitting.
+Model Export: Once the best pipeline is identified, we export it (e.g., tpot_model.pkl) for use in our production environment or dashboard application.
+Key Steps in *TrainModel.ipynb* :
+1. Load & preprocess data.
+2.** Run TPOT AutoML or other ML algorithms to find the best model.
+3.** Evaluate metrics (R², MAE, RMSE, etc.) and ensure model stability.
+4.** Export final model and related encoders (e.g., region_label_encoder.pkl).
+
+---
+
 *Thank you for using the OneHealth Early Warning Dashboard! Together, let’s harness the power of data to improve the health of people, animals, and our environment.*
