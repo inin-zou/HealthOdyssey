@@ -6,9 +6,6 @@ Below is a sample **README** that you can adapt to your own repository and workf
 
 This repository hosts the **OneHealth Early Warning** dashboard and the underlying model that forecasts the potential impact on public health based on food safety recalls (meat products), environmental factors, and regional indicators. The project demonstrates a **One Health** approach by integrating human, animal, and environmental health data to provide early warnings and insights.
 
-![OneHealth Early Warning Dashboard](docs/images/dashboard_preview.png)  
-*(Sample screenshot of the dashboard interface)*
-
 ---
 
 ## Table of Contents
